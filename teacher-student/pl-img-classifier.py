@@ -52,6 +52,7 @@ class ImageClassifierModel(pl.LightningModule):
         train_labeled_ds = STL10('.', split = 'train',
                                  transform = transforms.ToTensor(), download = True)
         train_labeled_ds = Subset(train_labeled_ds, torch.arange(500))
+        # taking only 500 labeled images to be more realistic
         train_labeled_loader = DataLoader(train_labeled_ds, batch_size=64)
         train_unlabeled_ds = STL10('.', split = 'unlabeled',
                                    transform = transforms.ToTensor(), download = True)
@@ -108,7 +109,7 @@ class ImageClassifierModel(pl.LightningModule):
         # calculating the cross entropy loss on the result
         self.total_classified += y.shape[0]
         self.correctly_classified += (y_hat.argmax(1) == y).sum().item()
-        # Calculating total and correctly classified images to determine the accuracy later
+        # calculating total and correctly classified images to determine the accuracy later
         self.aim_logger.experiment.track(loss.item(), name='val_loss',
                                             stage = self.current_model)
         # logging the loss and the accuracy with "val_" prefix
