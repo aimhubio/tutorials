@@ -1,5 +1,3 @@
-# Tuning Hyperparameters with Fixed Seed
+### How to tune hyperparams with fixed seeds using PyTorch Lightning and Aim
 
-This folder contains different frameworks and techniques for how to fix seed and tune hyperparams.
-
-- [PyTorch Lightning Implementation](pl-img-classifier.py)
+This folder contains the implementation used in [this](https://medium.com/aimstack/how-to-tune-hyper-params-with-fixed-seeds-using-pytorch-lightning-and-aim-c61c73f75c7c) tutorial.
