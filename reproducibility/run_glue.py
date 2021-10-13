@@ -20,14 +20,13 @@ import logging
 import os
 import random
 import sys
-from dataclasses import dataclass, field
 from typing import Optional
 
 import datasets
 import numpy as np
-from datasets import load_dataset, load_metric
-
 import transformers
+from dataclasses import dataclass, field
+from datasets import load_dataset, load_metric
 from transformers import (
     AutoConfig,
     AutoModelForSequenceClassification,
@@ -45,6 +44,46 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
+try:
+    from pip._internal.operations import freeze
+except ImportError:  # pip < 10.0
+    from pip.operations import freeze
+from aim import Run
+import platform, socket, re, uuid, psutil
+import torch
+run = Run()
+# collect Git commit number
+run['git_head_hash'] = os.popen('git log -1 --format="%H"').read().replace('\n', '')
+# collect python environment
+run['pip_versions'] = {
+    line.partition('\t')[0]: line.partition('\t')[2]
+    for line in freeze.freeze()
+}
+# collect runtime environment
+info = dict()
+info['platform'] = platform.system()
+info['platform-release'] = platform.release()
+info['platform-version'] = platform.version()
+info['architecture'] = platform.machine()
+info['hostname'] = socket.gethostname()
+info['ip-address'] = socket.gethostbyname(socket.gethostname())
+info['mac-address'] = ':'.join(re.findall('..', '%012x' % uuid.getnode()))
+info['processor'] = platform.processor()
+info['ram'] = str(round(psutil.virtual_memory().total / (1024.0 ** 3))) + " GB"
+run['info_sys'] = info
+# collect devices info
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device_info = dict()
+if device.type == 'cuda':
+    device_info['device_type'] = device.type
+    for idx in range(torch.cuda.device_count()):
+        device_info[torch.cuda.get_device_name(idx)] = {
+            'Allocated': f'{round(torch.cuda.memory_allocated(0) / 1024 ** 3, 1)} GB',
+            'Cached': f'{round(torch.cuda.memory_reserved(0) / 1024 ** 3, 1)} GB'
+        }
+else:
+    device_info['device_type'] = device.type
+run['device_info'] = device_info
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.11.0")
@@ -190,7 +229,8 @@ def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
-
+    # collect command-line arguments
+    run['arguments'] = str(sys.argv)
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
