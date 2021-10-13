@@ -260,6 +260,29 @@ def main():
     )
     logger.info(f"Training/evaluation parameters {training_args}")
 
+    # tracking arguments from model, data and training details
+    training_args_dict = dict()
+    for k, v in training_args.__dict__.items():
+        if isinstance(v, object):
+          training_args_dict[k] = str(v)
+        else:
+          training_args_dict[k] = v
+    run['training_args'] = training_args_dict
+    model_args_dict = dict()
+    for k, v in model_args.__dict__.items():
+        if isinstance(v, object):
+          model_args_dict[k] = str(v)
+        else:
+          model_args_dict[k] = v
+    run['model_args'] = model_args_dict
+    data_args_dict = dict()
+    for k, v in data_args.__dict__.items():
+        if isinstance(v, object):
+          data_args_dict[k] = str(v)
+        else:
+          data_args_dict[k] = v
+    run['data_args'] = data_args_dict
+
     # Detecting last checkpoint.
     last_checkpoint = None
     if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
