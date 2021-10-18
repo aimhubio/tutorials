@@ -20,7 +20,7 @@ import logging
 import os
 import random
 import sys
-from typing import Optional
+from typing import Optional, List
 
 import datasets
 import numpy as np
@@ -38,52 +38,48 @@ from transformers import (
     Trainer,
     TrainingArguments,
     default_data_collator,
-    set_seed,
 )
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
+from util import set_random_state
 try:
     from pip._internal.operations import freeze
 except ImportError:  # pip < 10.0
     from pip.operations import freeze
-from aim import Run
 import platform, socket, re, uuid, psutil
-import torch
+from aim import Run
+
+# Aim will automatically track the devices usage
 run = Run()
-# collect Git commit number
-run['git_head_hash'] = os.popen('git log -1 --format="%H"').read().replace('\n', '')
+# collect repository infomation
+if os.system('git rev-parse --git-dir') == 0:  # check if directory contains .git
+    repo_info = dict()
+    with os.popen('git status') as p:  # show the working tree status
+        repo_info['repo_status'] = p.read()
+    with os.popen('git log -1 --format="%H"') as p:  # fetch the latest commit id
+        repo_info['latest_commit_id'] = p.read().strip()
+    run['repo_info'] = repo_info
+else:
+    run['repo_info'] = None
 # collect python environment
 run['pip_versions'] = {
     line.partition('\t')[0]: line.partition('\t')[2]
     for line in freeze.freeze()
 }
-# collect runtime environment
-info = dict()
-info['platform'] = platform.system()
-info['platform-release'] = platform.release()
-info['platform-version'] = platform.version()
-info['architecture'] = platform.machine()
-info['hostname'] = socket.gethostname()
-info['ip-address'] = socket.gethostbyname(socket.gethostname())
-info['mac-address'] = ':'.join(re.findall('..', '%012x' % uuid.getnode()))
-info['processor'] = platform.processor()
-info['ram'] = str(round(psutil.virtual_memory().total / (1024.0 ** 3))) + " GB"
-run['info_sys'] = info
-# collect devices info
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-device_info = dict()
-if device.type == 'cuda':
-    device_info['device_type'] = device.type
-    for idx in range(torch.cuda.device_count()):
-        device_info[torch.cuda.get_device_name(idx)] = {
-            'Allocated': f'{round(torch.cuda.memory_allocated(0) / 1024 ** 3, 1)} GB',
-            'Cached': f'{round(torch.cuda.memory_reserved(0) / 1024 ** 3, 1)} GB'
-        }
-else:
-    device_info['device_type'] = device.type
-run['device_info'] = device_info
+# collect system information
+run['system_info'] = {
+    'platform': platform.system(),
+    'platform-release': platform.release(),
+    'platform-version': platform.version(),
+    'architecture': platform.machine(),
+    'hostname': socket.gethostname(),
+    'ip-address': socket.gethostbyname(socket.gethostname()),
+    'mac-address': ':'.join(re.findall('..', '%012x' % uuid.getnode())),
+    'processor': platform.processor(),
+    'ram': str(round(psutil.virtual_memory().total / (1024.0 ** 3))) + " GB"
+}
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.11.0")
@@ -225,13 +221,22 @@ class ModelArguments:
     )
 
 
+@dataclass
+class ReproducibilityTrainingArguments(TrainingArguments):
+    deterministic: bool = field(default=False, metadata={"help": "decide whether PyTorch operations must use deterministic."})
+    env_names: Optional[List[str]] = field(
+        default_factory=lambda: ['USER', 'CUDA_VISIBLE_DEVICES', 'CUDA_LAUNCH_BLOCKING', 'PYTHONHASHSEED', 'TPU_NAME', 'PWD'],
+        metadata={"help": "The list of environment variables in your system."}
+    )
+
+
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
     # collect command-line arguments
-    run['arguments'] = str(sys.argv)
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
+    run['arguments'] = sys.argv
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, ReproducibilityTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
@@ -261,27 +266,11 @@ def main():
     logger.info(f"Training/evaluation parameters {training_args}")
 
     # tracking arguments from model, data and training details
-    training_args_dict = dict()
-    for k, v in training_args.__dict__.items():
-        if isinstance(v, object):
-          training_args_dict[k] = str(v)
-        else:
-          training_args_dict[k] = v
-    run['training_args'] = training_args_dict
-    model_args_dict = dict()
-    for k, v in model_args.__dict__.items():
-        if isinstance(v, object):
-          model_args_dict[k] = str(v)
-        else:
-          model_args_dict[k] = v
-    run['model_args'] = model_args_dict
-    data_args_dict = dict()
-    for k, v in data_args.__dict__.items():
-        if isinstance(v, object):
-          data_args_dict[k] = str(v)
-        else:
-          data_args_dict[k] = v
-    run['data_args'] = data_args_dict
+    run['hparams'] = {
+        'training_args': {**training_args.to_sanitized_dict()},
+        'model_args': {**model_args.__dict__},
+        'data_args': {**data_args.__dict__}
+    }
 
     # Detecting last checkpoint.
     last_checkpoint = None
@@ -298,8 +287,13 @@ def main():
                 "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
             )
 
-    # Set seed before initializing model.
-    set_seed(training_args.seed)
+    # Set randomness state before initializing model.
+    set_random_state(seed=training_args.seed, deterministic=training_args.deterministic)
+    # Get environment variables
+    run['env_info'] = {
+        f'{env_name}': os.getenv(env_name, None)
+        for env_name in training_args.env_names
+    }
 
     # Get the datasets: you can either provide your own CSV/JSON training and evaluation files (see below)
     # or specify a GLUE benchmark task (the dataset will be downloaded automatically from the datasets Hub).
